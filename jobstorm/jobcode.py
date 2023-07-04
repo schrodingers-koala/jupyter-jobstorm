@@ -11,7 +11,7 @@ PROJECT = "jobstorm"
 SHRDIR = "/home/shared"
 IPYTMP = ["/ipykernel", "ipython-input"]
 SUFFIX = "tmp_"
-PYTBIN = "python3"
+PYTCMD = "python3"
 PRMNAME = "server.param"
 MAXLINE = 100
 pattern = re.compile('"([^"]+)"')
@@ -48,6 +48,26 @@ class JobResult:
 
 
 class JobStorm:
+    """Job generator.
+
+    Constructor options
+    -------------------
+    server_url : str
+        URL of Jenkins.
+    username : str
+        Jenkins username.
+    password : str
+        Jenkins password.
+    shared_dir : str
+        root directory path of job workspace.
+    project : str
+        Jenkins project name.
+    python_cmd : str
+        Python command to run Python script.
+    server_timeout : str
+        timeout setting for Jenkins server.
+    """
+
     def __init__(
         self,
         server_url=None,
@@ -55,7 +75,7 @@ class JobStorm:
         password=None,
         shared_dir=SHRDIR,
         project=PROJECT,
-        python_bin=PYTBIN,
+        python_cmd=PYTCMD,
         server_timeout=60,
     ):
         if shared_dir is None:
@@ -79,7 +99,7 @@ class JobStorm:
         self.codes = []
         self.funcs = []
         self.srcfilepath = None
-        self.python_bin = python_bin
+        self.python_cmd = python_cmd
         self.server_timeout = server_timeout
 
         if server_url is not None:
@@ -241,7 +261,7 @@ class JobStorm:
         return JobResult(output_paramfilepath, filename, self)
 
     def create_project(self):
-        command = f"{self.python_bin} $job_filename"
+        command = f"{self.python_cmd} $job_filename"
         xmlstr = f"""<?xml version='1.1' encoding='UTF-8'?>
 <project>
   <actions/>
