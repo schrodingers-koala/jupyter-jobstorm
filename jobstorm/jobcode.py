@@ -37,7 +37,7 @@ class JobResult:
             if build_info["result"] is None:
                 raise RuntimeError()
         except:
-            return "GET_BUILD_INFO_ERROR"
+            return "JOB_WAITING_IN_QUEUE"
         return build_info["result"]
 
     def get_result(self):
