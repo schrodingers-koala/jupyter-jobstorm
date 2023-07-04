@@ -55,6 +55,8 @@ class JobStorm:
         password=None,
         shared_dir=SHRDIR,
         project=PROJECT,
+        python_bin=PYTBIN,
+        server_timeout=60,
     ):
         if shared_dir is None:
             raise ValueError("shared_dir must be set.")
@@ -77,10 +79,15 @@ class JobStorm:
         self.codes = []
         self.funcs = []
         self.srcfilepath = None
+        self.python_bin = python_bin
+        self.server_timeout = server_timeout
 
         if server_url is not None:
             self.server = jenkins.Jenkins(
-                server_url, username=username, password=password
+                server_url,
+                username=username,
+                password=password,
+                timeout=self.server_timeout,
             )
             me = self.server.get_whoami()
             if me["fullName"] is None:
@@ -99,6 +106,7 @@ class JobStorm:
                 setup["server_url"],
                 username=setup["username"],
                 password=setup["password"],
+                timeout=self.server_timeout,
             )
             me = self.server.get_whoami()
             if me["fullName"] is None:
@@ -233,7 +241,7 @@ class JobStorm:
         return JobResult(output_paramfilepath, filename, self)
 
     def create_project(self):
-        command = f"{PYTBIN} $job_filename"
+        command = f"{self.python_bin} $job_filename"
         xmlstr = f"""<?xml version='1.1' encoding='UTF-8'?>
 <project>
   <actions/>
