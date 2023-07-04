@@ -9,7 +9,7 @@ from tabulate import tabulate
 
 PROJECT = "jobstorm"
 SHRDIR = "/home/shared"
-IPYTMP = "/ipykernel"
+IPYTMP = ["/ipykernel", "ipython-input"]
 SUFFIX = "tmp_"
 PYTBIN = "python3"
 PRMNAME = "server.param"
@@ -130,6 +130,12 @@ class JobStorm:
             codes += code
         return codes
 
+    def _is_ipy_tmp(self, filepath):
+        for ipy_tmp in IPYTMP:
+            if ipy_tmp in filepath:
+                return True
+        return False
+
     def setfunc(self, level=1):
         self.funcs = []
         for i, frame_tuple in enumerate(inspect.stack()):
@@ -138,7 +144,7 @@ class JobStorm:
             if i > level:
                 break
             for k, v in frame_tuple[0].f_globals.items():
-                if inspect.isfunction(v) and IPYTMP in inspect.getfile(v):
+                if inspect.isfunction(v) and self._is_ipy_tmp(inspect.getfile(v)):
                     self.funcs.append(v.__name__)
 
     def getfunc(self):
