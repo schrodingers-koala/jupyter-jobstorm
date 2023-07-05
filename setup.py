@@ -11,7 +11,7 @@ with open(path.join(here, "README.md"), encoding="utf-8") as f:
 setup(
     name="jupyter-jobstorm",
     packages=["jobstorm"],
-    version="0.1.1",
+    version="0.1.2",
     license="MIT",
     install_requires=["dill", "python-jenkins", "tabulate"],
     author="schrodingers-koala",
