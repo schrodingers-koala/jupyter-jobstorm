@@ -1,0 +1,35 @@
+name: "create release"
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "jobstorm/_version.py"
+  pull_request:
+    branches: [ main ]
+    paths:
+      - "jobstorm/_version.py"
+
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: get version
+        id: version
+        run: echo "::set-output name=text::$(sed -n 's/^__version__\s*=\s*"\([^"]*\)"/\1/p' jobstorm/_version.py)"
+
+      - name: create release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.version.outputs.text }}
+          release_name: ${{ steps.version.outputs.text }}
+          draft: false
+          prerelease: false
