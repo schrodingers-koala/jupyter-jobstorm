@@ -11,7 +11,9 @@ PROJECT = "jobstorm"
 SHRDIR = "/home/shared"
 IPYTMP = ["/ipykernel", "ipython-input"]
 SUFFIX = "tmp_"
+JOBCMD = "python3"
 PYTCMD = "python3"
+SAGCMD = "sage"
 PRMNAME = "server.param"
 MAXLINE = 100
 pattern = re.compile('"([^"]+)"')
@@ -47,7 +49,7 @@ class JobResult:
         return self.jobstorm.loadparam(self.output_paramfilepath)
 
 
-class JobStorm:
+class JobStormBase:
     """Job generator.
 
     Constructor options
@@ -62,8 +64,8 @@ class JobStorm:
         root directory path of job workspace.
     project : str
         Jenkins project name.
-    python_cmd : str
-        Python command to run Python script.
+    job_cmd : str
+        command to run script.
     server_timeout : str
         timeout setting for Jenkins server.
     """
@@ -75,7 +77,7 @@ class JobStorm:
         password=None,
         shared_dir=SHRDIR,
         project=PROJECT,
-        python_cmd=PYTCMD,
+        job_cmd=JOBCMD,
         server_timeout=60,
     ):
         if shared_dir is None:
@@ -99,7 +101,7 @@ class JobStorm:
         self.codes = []
         self.funcs = []
         self.srcfilepath = None
-        self.python_cmd = python_cmd
+        self.job_cmd = job_cmd
         self.server_timeout = server_timeout
 
         if server_url is not None:
@@ -188,24 +190,6 @@ class JobStorm:
             codes += code
         return codes
 
-    def savefunc(self):
-        self.setfunc(level=2)
-        src = self.getcode()
-        src += "\n"
-        src += "\n"
-        src += "from jobstorm import *\n"
-        src += f'jobstorm = JobStorm(shared_dir="{self.shared_dir}", project="{self.project}")\n'
-        src += "\n"
-        src += "\n"
-        src += self.getfunc()
-        tss = datetime.now().strftime("%Y%m%d%H%M%S%f")
-        filename = f"{SUFFIX}{tss}.py"
-        filepath = os.path.join(self.dirpath, filename)
-        with open(filepath, "w") as f:
-            f.write(src)
-        self.srcfilepath = filepath
-        return filepath
-
     def retrieve(self, name):
         for frame_tuple in inspect.stack():
             d = frame_tuple[0].f_globals
@@ -228,40 +212,8 @@ class JobStorm:
         fin.close()
         return data
 
-    def makefuncjob(self, runfunc, *args, **kwargs):
-        if self.srcfilepath is None:
-            # error
-            return
-        tss = datetime.now().strftime("%Y%m%d%H%M%S%f")
-        paramfilename = f"{SUFFIX}{tss}.param"
-        paramfilepath = os.path.join(self.dirpath, paramfilename)
-        self.saveparam(paramfilepath, [args, kwargs])
-        output_paramfilepath = f"{paramfilepath}.output"
-
-        srcfile = os.path.basename(self.srcfilepath)
-
-        if inspect.isfunction(runfunc):
-            runfuncname = runfunc.__name__
-        else:
-            runfuncname = runfunc
-
-        src = f'exec(open("{srcfile}").read())\n'
-        src += "def run_jobcode():\n"
-        src += f'    params = jobstorm.loadparam("{paramfilepath}")\n'
-        src += f"    output = {runfuncname}(*params[0], **params[1])\n"
-        src += f'    jobstorm.saveparam("{output_paramfilepath}", output)\n'
-        src += "\n"
-        src += "run_jobcode()\n"
-        filename = f"{SUFFIX}{tss}_job.py"
-        filepath = os.path.join(self.dirpath, filename)
-        with open(filepath, "w") as f:
-            f.write(src)
-
-        self.server.build_job(self.project, {"job_filename": filename})
-        return JobResult(output_paramfilepath, filename, self)
-
     def create_project(self):
-        command = f"{self.python_cmd} $job_filename"
+        command = f"$job_cmd $job_filename"
         xmlstr = f"""<?xml version='1.1' encoding='UTF-8'?>
 <project>
   <actions/>
@@ -278,7 +230,13 @@ class JobStorm:
         <hudson.model.TextParameterDefinition>
           <name>dirpath_of_workspace</name>
           <defaultValue>{self.dirpath}</defaultValue>
-          <description>job filename</description>
+          <description>job workspace</description>
+          <trim>false</trim>
+        </hudson.model.TextParameterDefinition>
+        <hudson.model.TextParameterDefinition>
+          <name>job_cmd</name>
+          <defaultValue>{self.job_cmd}</defaultValue>
+          <description>job command</description>
           <trim>false</trim>
         </hudson.model.TextParameterDefinition>
       </parameterDefinitions>
@@ -302,6 +260,7 @@ class JobStorm:
   <buildWrappers/>
 </project>"""
         self.server.create_job(self.project, xmlstr)
+        print(f"project (name={self.project}) is created.")
 
     def delete_project(self):
         n_job = len(self.get_job_list())
@@ -365,6 +324,80 @@ class JobStorm:
         except:
             print(f"{filepath} is not found or some error occurs.")
 
+
+class JobStormPython(JobStormBase):
+    def __init__(
+        self,
+        server_url=None,
+        username=None,
+        password=None,
+        shared_dir=SHRDIR,
+        project=PROJECT,
+        job_cmd=PYTCMD,
+        server_timeout=60,
+    ):
+        super().__init__(
+            server_url,
+            username,
+            password,
+            shared_dir,
+            project,
+            job_cmd,
+            server_timeout,
+        )
+
+    def savefunc(self):
+        self.setfunc(level=2)
+        src = self.getcode()
+        src += "\n"
+        src += "\n"
+        src += "from jobstorm import *\n"
+        src += f'jobstorm = JobStorm(shared_dir="{self.shared_dir}", project="{self.project}")\n'
+        src += "\n"
+        src += "\n"
+        src += self.getfunc()
+        tss = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        filename = f"{SUFFIX}{tss}.py"
+        filepath = os.path.join(self.dirpath, filename)
+        with open(filepath, "w") as f:
+            f.write(src)
+        self.srcfilepath = filepath
+        return filepath
+
+    def makefuncjob(self, runfunc, *args, **kwargs):
+        if self.srcfilepath is None:
+            # error
+            return
+        tss = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        paramfilename = f"{SUFFIX}{tss}.param"
+        paramfilepath = os.path.join(self.dirpath, paramfilename)
+        self.saveparam(paramfilepath, [args, kwargs])
+        output_paramfilepath = f"{paramfilepath}.output"
+
+        srcfile = os.path.basename(self.srcfilepath)
+
+        if inspect.isfunction(runfunc):
+            runfuncname = runfunc.__name__
+        else:
+            runfuncname = runfunc
+
+        src = f'exec(open("{srcfile}").read())\n'
+        src += "def run_jobcode():\n"
+        src += f'    params = jobstorm.loadparam("{paramfilepath}")\n'
+        src += f"    output = {runfuncname}(*params[0], **params[1])\n"
+        src += f'    jobstorm.saveparam("{output_paramfilepath}", output)\n'
+        src += "\n"
+        src += "run_jobcode()\n"
+        filename = f"{SUFFIX}{tss}_job.py"
+        filepath = os.path.join(self.dirpath, filename)
+        with open(filepath, "w") as f:
+            f.write(src)
+
+        self.server.build_job(
+            self.project, {"job_filename": filename, "job_cmd": self.job_cmd}
+        )
+        return JobResult(output_paramfilepath, filename, self)
+
     def delete_job(self, job_number):
         def is_same_func_script_exists(job_number, func_script):
             for k, v in job_dict.items():
@@ -391,3 +424,176 @@ class JobStorm:
         # self.server.delete_build(self.project, job_number)
         print("delete build job not implemented because of jenkins request error.")
         return
+
+
+class JobStormSage(JobStormBase):
+    def __init__(
+        self,
+        server_url=None,
+        username=None,
+        password=None,
+        shared_dir=SHRDIR,
+        project=PROJECT,
+        job_cmd=SAGCMD,
+        server_timeout=60,
+    ):
+        super().__init__(
+            server_url,
+            username,
+            password,
+            shared_dir,
+            project,
+            job_cmd,
+            server_timeout,
+        )
+
+    def savefunc(self):
+        self.setfunc(level=2)
+        src = self.getcode()
+        src += "\n"
+        src += "\n"
+        src += "from jobstorm import *\n"
+        src += f'jobstorm = JobStorm(shared_dir="{self.shared_dir}", project="{self.project}")\n'
+        src += "\n"
+        src += "\n"
+        src += "def Integer(x):\n"
+        src += "    return x\n"
+        src += "\n"
+        src += "\n"
+        src += "def RealNumber(x):\n"
+        src += "    return x\n"
+        src += "\n"
+        src += "\n"
+        src += self.getfunc()
+        tss = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        filename = f"{SUFFIX}{tss}.sage"
+        filepath = os.path.join(self.dirpath, filename)
+        with open(filepath, "w") as f:
+            f.write(src)
+        self.srcfilepath = filepath
+        return filepath
+
+    def makefuncjob(self, runfunc, *args, **kwargs):
+        if self.srcfilepath is None:
+            # error
+            return
+        tss = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        paramfilename = f"{SUFFIX}{tss}.param"
+        paramfilepath = os.path.join(self.dirpath, paramfilename)
+        self.saveparam(paramfilepath, [args, kwargs])
+        output_paramfilepath = f"{paramfilepath}.output"
+
+        srcfile = os.path.basename(self.srcfilepath)
+
+        if inspect.isfunction(runfunc):
+            runfuncname = runfunc.__name__
+        else:
+            runfuncname = runfunc
+
+        src = f'load("{srcfile}")\n'
+        src += "def run_jobcode():\n"
+        src += f'    params = jobstorm.loadparam("{paramfilepath}")\n'
+        src += f"    output = {runfuncname}(*params[0], **params[1])\n"
+        src += f'    jobstorm.saveparam("{output_paramfilepath}", output)\n'
+        src += "\n"
+        src += "run_jobcode()\n"
+        filename = f"{SUFFIX}{tss}_job.sage"
+        filepath = os.path.join(self.dirpath, filename)
+        with open(filepath, "w") as f:
+            f.write(src)
+
+        self.server.build_job(
+            self.project, {"job_filename": filename, "job_cmd": self.job_cmd}
+        )
+        return JobResult(output_paramfilepath, filename, self)
+
+    def delete_job(self, job_number):
+        def is_same_func_script_exists(job_number, func_script):
+            for k, v in job_dict.items():
+                if k == job_number:
+                    continue
+                if func_script == v[3]:
+                    return True
+            return False
+
+        job_list = self.get_job_list()
+        job_dict = {job[0]: job[1:] for job in job_list}
+        job = job_dict.get(job_number)
+        if job is None:
+            print(f"job ({job_number}) is not found.")
+            return
+        job_script = job[2]
+        func_script = job[3]
+        job_name = job_script[0:-7]
+        self.delete_file(f"{job_name}_job.sage")
+        self.delete_file(f"{job_name}.param")
+        self.delete_file(f"{job_name}.param.output")
+        if not is_same_func_script_exists(job_number, func_script):
+            self.delete_file(func_script)
+        # self.server.delete_build(self.project, job_number)
+        print("delete build job not implemented because of jenkins request error.")
+        return
+
+
+class JobStorm(JobStormPython):
+    def __init__(
+        self,
+        server_url=None,
+        username=None,
+        password=None,
+        shared_dir=SHRDIR,
+        project=PROJECT,
+        python_cmd=PYTCMD,
+        server_timeout=60,
+    ):
+        super().__init__(
+            server_url,
+            username,
+            password,
+            shared_dir,
+            project,
+            python_cmd,
+            server_timeout,
+        )
+
+    @classmethod
+    def python(
+        cls,
+        server_url=None,
+        username=None,
+        password=None,
+        shared_dir=SHRDIR,
+        project=PROJECT,
+        job_cmd=PYTCMD,
+        server_timeout=60,
+    ):
+        return JobStormPython(
+            server_url,
+            username,
+            password,
+            shared_dir,
+            project,
+            job_cmd,
+            server_timeout,
+        )
+
+    @classmethod
+    def sage(
+        cls,
+        server_url=None,
+        username=None,
+        password=None,
+        shared_dir=SHRDIR,
+        project=PROJECT,
+        job_cmd=SAGCMD,
+        server_timeout=60,
+    ):
+        return JobStormSage(
+            server_url,
+            username,
+            password,
+            shared_dir,
+            project,
+            job_cmd,
+            server_timeout,
+        )

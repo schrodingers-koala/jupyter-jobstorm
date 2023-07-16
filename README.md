@@ -19,7 +19,7 @@ I believe that Jenkins will catch and execute jobs which are sent from you like 
 ## Feature
 
 - Supporting Jenkins as job runner
-- Running a function (\*) of Python script as a job
+- Running a function (\*) of Python/SageMath script as a job
 - Retrieving the status and the result of the job
 
 (\*) Currently only variables of function arguments are passed to the function and variables outside of the function are not supported.
@@ -43,7 +43,9 @@ $ pip install jupyter-jobstorm
 
 ## Usage
 
-- [Example 1: Job Test](https://github.com/schrodingers-koala/jupyter-jobstorm/blob/main/example/job_test.ipynb)
+- [Example 1: Python Job Test](https://github.com/schrodingers-koala/jupyter-jobstorm/blob/main/example/job_test.ipynb)
+
+- [Example 2: Sage Job Test](https://github.com/schrodingers-koala/jupyter-jobstorm/blob/main/example/sage_job_test.ipynb)
 
 ## License
 
