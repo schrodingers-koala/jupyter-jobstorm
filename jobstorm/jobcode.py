@@ -5,18 +5,22 @@ import re
 import inspect
 import dill
 import jenkins
+from jenkins.__init__ import DELETE_BUILD
 from tabulate import tabulate
+from urllib.parse import urljoin
+import requests
 
 PROJECT = "jobstorm"
 SHRDIR = "/home/shared"
 IPYTMP = ["/ipykernel", "ipython-input"]
-SUFFIX = "tmp_"
+PREFIX = "tmp_"
 JOBCMD = "python3"
 PYTCMD = "python3"
 SAGCMD = "sage"
 PRMNAME = "server.param"
 MAXLINE = 100
-pattern = re.compile('"([^"]+)"')
+func_script_pattern = re.compile('"([^"]+)"')
+tmp_pattern = re.compile("(tmp_[^_]+)")
 
 
 class JobResult:
@@ -26,6 +30,9 @@ class JobResult:
         self.jobstorm = jobstorm
         self.job_number = None
         self.server = jobstorm.server
+        job_prefix = jobstorm.get_job_prefix(job_filename)
+        message_filename = job_prefix + ".message"
+        self.message_filepath = os.path.join(jobstorm.dirpath, message_filename)
 
     def get_job_number(self):
         if self.job_number is None:
@@ -47,6 +54,20 @@ class JobResult:
         if status not in ["SUCCESS", "UNSTABLE"]:
             raise RuntimeError("job failure or job not finished.")
         return self.jobstorm.loadparam(self.output_paramfilepath)
+
+    def set_message(self, message):
+        f = open(self.message_filepath, "w")
+        f.write(message)
+        f.close()
+
+    def get_message(self):
+        try:
+            f = open(self.message_filepath)
+            message = f.readline()
+            f.close()
+        except:
+            message = ""
+        return message
 
 
 class JobStormBase:
@@ -272,8 +293,8 @@ class JobStormBase:
         job_info = self.server.get_job_info(self.project)
         for build in job_info["builds"]:
             job_number = build["number"]
-            build_info = self.server.get_build_info(self.project, job_number)
             try:
+                build_info = self.server.get_build_info(self.project, job_number)
                 filename = build_info["actions"][0]["parameters"][0]["value"]
                 if job_filename == filename:
                     return job_number
@@ -281,38 +302,109 @@ class JobStormBase:
                 pass
         raise RuntimeError("job number not found.")
 
-    def get_job_list(self):
-        job_info = self.server.get_job_info(self.project)
-        job_list = []
-        for build in job_info["builds"]:
-            job_number = build["number"]
+    def get_job(self, job_number, info="detail"):
+        def get_filename(build_info):
+            try:
+                filename = build_info["actions"][0]["parameters"][0]["value"]
+            except:
+                filename = None
+            return filename
+
+        def get_script_file(filename):
+            script_file = ""
+            if not filename:
+                return script_file
+            try:
+                filepath = os.path.join(self.dirpath, filename)
+                f = open(filepath)
+                script = f.readline()
+                f.close()
+                match = func_script_pattern.search(script)
+                script_file = match.group(1)
+            except:
+                pass
+            return script_file
+
+        def get_message(filename):
+            message = ""
+            if not filename:
+                return message
+            try:
+                job_prefix = self.get_job_prefix(filename)
+                message_filename = job_prefix + ".message"
+                message_filepath = os.path.join(self.dirpath, message_filename)
+                f = open(message_filepath)
+                message = f.readline()
+                f.close()
+            except:
+                pass
+            return message
+
+        try:
             build_info = self.server.get_build_info(self.project, job_number)
             result = build_info["result"]
             ts = int(build_info["timestamp"] / 1000)
             dt = datetime.fromtimestamp(ts)
-            try:
-                filename = build_info["actions"][0]["parameters"][0]["value"]
-                filepath = os.path.join(self.dirpath, filename)
-                script = open(filepath).readline()
-                match = pattern.search(script)
-                script_file = match.group(1)
-            except:
-                script_file = ""
-            job_list.append(
+            filename = get_filename(build_info)
+            message = get_message(filename)
+        except:
+            return None
+
+        if info != "simple":
+            script_file = get_script_file(filename)
+        job_elem = [
+            job_number,
+            dt.strftime("%Y/%m/%d %H:%M:%S"),
+            result,
+            message,
+        ]
+        if info != "simple":
+            job_elem.extend(
                 [
-                    job_number,
-                    dt.strftime("%Y/%m/%d %H:%M:%S"),
-                    result,
                     filename,
                     script_file,
                 ]
             )
+        return job_elem
+
+    def get_job_list(self, info="detail"):
+        job_info = self.server.get_job_info(self.project)
+        job_list = []
+        for build in job_info["builds"]:
+            job_number = build["number"]
+            job = self.get_job(job_number, info=info)
+            if job is None:
+                continue
+            job_list.append(job)
         return job_list
 
-    def print_job_list(self):
-        headers = ["job num", "timestamp", "result", "job script", "function script"]
+    def get_job_prefix(self, job_filename):
+        match = tmp_pattern.search(job_filename)
+        return match.group(1)
+
+    def get_jobresult(self, job_number):
+        try:
+            build_info = self.server.get_build_info(self.project, job_number)
+            filename = build_info["actions"][0]["parameters"][0]["value"]
+            job_prefix = self.get_job_prefix(filename)
+            output_paramfilename = job_prefix + ".param.output"
+            output_paramfilepath = os.path.join(self.dirpath, output_paramfilename)
+            return JobResult(output_paramfilepath, filename, self)
+        except:
+            return None
+
+    def print_job_list(self, max_cols=None, info="simple"):
+        job_list = self.get_job_list(info=info)
+        headers = ["job num", "timestamp", "result", "message"]
+        if info != "simple":
+            headers.extend(
+                [
+                    "job script",
+                    "function script",
+                ]
+            )
         table = tabulate(
-            tabular_data=self.get_job_list(), headers=headers, tablefmt="simple"
+            tabular_data=job_list[0:max_cols], headers=headers, tablefmt="simple"
         )
         print(table)
 
@@ -323,6 +415,16 @@ class JobStormBase:
             print(f"{filepath} is removed.")
         except:
             print(f"{filepath} is not found or some error occurs.")
+
+    def server_delete_build(self, job_number):
+        # workaround
+        param = self.server._get_job_folder(self.project)
+        url_path = DELETE_BUILD % (
+            {"folder_url": param[0], "short_name": param[1], "number": job_number}
+        )
+        url = str(urljoin(self.server.server, url_path))
+        req = requests.Request("POST", url)
+        self.server.jenkins_request(req, True, True).text
 
 
 class JobStormPython(JobStormBase):
@@ -357,7 +459,7 @@ class JobStormPython(JobStormBase):
         src += "\n"
         src += self.getfunc()
         tss = datetime.now().strftime("%Y%m%d%H%M%S%f")
-        filename = f"{SUFFIX}{tss}.py"
+        filename = f"{PREFIX}{tss}.py"
         filepath = os.path.join(self.dirpath, filename)
         with open(filepath, "w") as f:
             f.write(src)
@@ -369,7 +471,7 @@ class JobStormPython(JobStormBase):
             # error
             return
         tss = datetime.now().strftime("%Y%m%d%H%M%S%f")
-        paramfilename = f"{SUFFIX}{tss}.param"
+        paramfilename = f"{PREFIX}{tss}.param"
         paramfilepath = os.path.join(self.dirpath, paramfilename)
         self.saveparam(paramfilepath, [args, kwargs])
         output_paramfilepath = f"{paramfilepath}.output"
@@ -388,7 +490,7 @@ class JobStormPython(JobStormBase):
         src += f'    jobstorm.saveparam("{output_paramfilepath}", output)\n'
         src += "\n"
         src += "run_jobcode()\n"
-        filename = f"{SUFFIX}{tss}_job.py"
+        filename = f"{PREFIX}{tss}_job.py"
         filepath = os.path.join(self.dirpath, filename)
         with open(filepath, "w") as f:
             f.write(src)
@@ -413,16 +515,17 @@ class JobStormPython(JobStormBase):
         if job is None:
             print(f"job ({job_number}) is not found.")
             return
-        job_script = job[2]
-        func_script = job[3]
+        job_script = job[3]
+        func_script = job[4]
         job_name = job_script[0:-7]
         self.delete_file(f"{job_name}_job.py")
         self.delete_file(f"{job_name}.param")
         self.delete_file(f"{job_name}.param.output")
+        self.delete_file(f"{job_name}.message")
         if not is_same_func_script_exists(job_number, func_script):
             self.delete_file(func_script)
         # self.server.delete_build(self.project, job_number)
-        print("delete build job not implemented because of jenkins request error.")
+        self.server_delete_build(job_number)
         return
 
 
@@ -466,7 +569,7 @@ class JobStormSage(JobStormBase):
         src += "\n"
         src += self.getfunc()
         tss = datetime.now().strftime("%Y%m%d%H%M%S%f")
-        filename = f"{SUFFIX}{tss}.sage"
+        filename = f"{PREFIX}{tss}.sage"
         filepath = os.path.join(self.dirpath, filename)
         with open(filepath, "w") as f:
             f.write(src)
@@ -478,7 +581,7 @@ class JobStormSage(JobStormBase):
             # error
             return
         tss = datetime.now().strftime("%Y%m%d%H%M%S%f")
-        paramfilename = f"{SUFFIX}{tss}.param"
+        paramfilename = f"{PREFIX}{tss}.param"
         paramfilepath = os.path.join(self.dirpath, paramfilename)
         self.saveparam(paramfilepath, [args, kwargs])
         output_paramfilepath = f"{paramfilepath}.output"
@@ -497,7 +600,7 @@ class JobStormSage(JobStormBase):
         src += f'    jobstorm.saveparam("{output_paramfilepath}", output)\n'
         src += "\n"
         src += "run_jobcode()\n"
-        filename = f"{SUFFIX}{tss}_job.sage"
+        filename = f"{PREFIX}{tss}_job.sage"
         filepath = os.path.join(self.dirpath, filename)
         with open(filepath, "w") as f:
             f.write(src)
@@ -522,16 +625,17 @@ class JobStormSage(JobStormBase):
         if job is None:
             print(f"job ({job_number}) is not found.")
             return
-        job_script = job[2]
-        func_script = job[3]
+        job_script = job[3]
+        func_script = job[4]
         job_name = job_script[0:-7]
         self.delete_file(f"{job_name}_job.sage")
         self.delete_file(f"{job_name}.param")
         self.delete_file(f"{job_name}.param.output")
+        self.delete_file(f"{job_name}.message")
         if not is_same_func_script_exists(job_number, func_script):
             self.delete_file(func_script)
         # self.server.delete_build(self.project, job_number)
-        print("delete build job not implemented because of jenkins request error.")
+        self.server_delete_build(job_number)
         return
 
 
