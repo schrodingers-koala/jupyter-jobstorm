@@ -47,6 +47,8 @@ $ pip install jupyter-jobstorm
 
 - [Example 2: Sage Job Test](https://github.com/schrodingers-koala/jupyter-jobstorm/blob/main/example/sage_job_test.ipynb)
 
+- [Example 3: Job Management Test](https://github.com/schrodingers-koala/jupyter-jobstorm/blob/main/example/job_management.ipynb)
+
 ## License
 
 Jupyter-JobStorm is under MIT license.
