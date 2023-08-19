@@ -9,6 +9,7 @@ from jenkins.__init__ import DELETE_BUILD
 from tabulate import tabulate
 from urllib.parse import urljoin
 import requests
+import time
 
 PROJECT = "jobstorm"
 SHRDIR = "/home/shared"
@@ -125,6 +126,17 @@ class JobStormBase:
         self.job_cmd = job_cmd
         self.server_timeout = server_timeout
 
+        self.login(server_url=server_url, username=username, password=password)
+
+        try:
+            xmlstr = self.server.get_job_config(self.project)
+            if xmlstr is None:
+                raise RuntimeError()
+        except:
+            print(f"project (name={self.project}) is not created.")
+            print("please create project by create_project().")
+
+    def login_no_retry(self, server_url=None, username=None, password=None):
         if server_url is not None:
             self.server = jenkins.Jenkins(
                 server_url,
@@ -154,13 +166,52 @@ class JobStormBase:
             me = self.server.get_whoami()
             if me["fullName"] is None:
                 raise RuntimeError("authentication failed.")
-        try:
-            xmlstr = self.server.get_job_config(self.project)
-            if xmlstr is None:
-                raise RuntimeError()
-        except:
-            print(f"project (name={self.project}) is not created.")
-            print("please create project by create_project().")
+
+    def login(self, server_url=None, username=None, password=None):
+        retry_max = 2
+        for retry_count in range(retry_max + 1):
+            retry = False
+            try:
+                self.login_no_retry(
+                    server_url=server_url, username=username, password=password
+                )
+            except:
+                retry = True
+            if not retry:
+                break
+            if retry_count < retry_max:
+                time.sleep(2)
+        if retry:
+            raise RuntimeError("login failed.")
+
+    def _retry_api(self, apiname, *args, **kwargs):
+        retry_max = 1
+        for retry_count in range(retry_max + 1):
+            retry = False
+            try:
+                apifunc = getattr(self.server, apiname)
+                result = apifunc(*args, **kwargs)
+            except jenkins.JenkinsException as jenkins_e:
+                messages = str(jenkins_e).splitlines()
+                if len(messages) > 0 and "403" in messages[0]:
+                    print(
+                        "possibly authentication failed while accessing to Jenkins server."
+                    )
+                    retry = True
+                else:
+                    raise jenkins_e
+
+            if not retry:
+                break
+            time.sleep(1)
+            print("try login...", end="")
+            self.login()
+            print("OK")
+            if retry_count < retry_max:
+                time.sleep(2)
+        if retry:
+            raise RuntimeError(f"{apifunc.__name__}() fails.")
+        return result
 
     def setcode(self):
         for i, frame_tuple in enumerate(inspect.stack(context=MAXLINE + 1)):
@@ -187,16 +238,28 @@ class JobStormBase:
                 return True
         return False
 
-    def setfunc(self, level=1):
+    def setfunc(self):
         self.funcs = []
-        for i, frame_tuple in enumerate(inspect.stack()):
-            if i < level:
-                continue
-            if i > level:
+        stack = inspect.stack()
+        ipy_list = [
+            i
+            for i, frame_tuple in enumerate(stack)
+            if self._is_ipy_tmp(frame_tuple.filename)
+        ]
+        if len(ipy_list) == 0:
+            return
+        ipy = None
+        for i in range(len(ipy_list)):
+            if i + ipy_list[0] == ipy_list[i]:
+                ipy = i
+            else:
                 break
-            for k, v in frame_tuple[0].f_globals.items():
-                if inspect.isfunction(v) and self._is_ipy_tmp(inspect.getfile(v)):
-                    self.funcs.append(v.__name__)
+        if ipy is None:
+            return
+        frame_tuple = stack[ipy_list[ipy]]
+        for k, v in frame_tuple[0].f_globals.items():
+            if inspect.isfunction(v) and self._is_ipy_tmp(inspect.getfile(v)):
+                self.funcs.append(v.__name__)
 
     def getfunc(self):
         funcs = []
@@ -269,7 +332,7 @@ class JobStormBase:
   <blockBuildWhenDownstreamBuilding>false</blockBuildWhenDownstreamBuilding>
   <blockBuildWhenUpstreamBuilding>false</blockBuildWhenUpstreamBuilding>
   <triggers/>
-  <concurrentBuild>false</concurrentBuild>
+  <concurrentBuild>true</concurrentBuild>
   <builders>
     <hudson.tasks.Shell>
       <command>cd $dirpath_of_workspace
@@ -280,14 +343,14 @@ class JobStormBase:
   <publishers/>
   <buildWrappers/>
 </project>"""
-        self.server.create_job(self.project, xmlstr)
+        self._retry_api("create_job", self.project, xmlstr)
         print(f"project (name={self.project}) is created.")
 
     def delete_project(self):
         n_job = len(self.get_job_list())
         if n_job > 0:
             raise RuntimeError("all jobs must be deleted.")
-        self.server.delete_job(self.project)
+        self._retry_api("delete_job", self.project)
 
     def find_job(self, job_filename):
         job_info = self.server.get_job_info(self.project)
@@ -424,7 +487,7 @@ class JobStormBase:
         )
         url = str(urljoin(self.server.server, url_path))
         req = requests.Request("POST", url)
-        self.server.jenkins_request(req, True, True).text
+        self._retry_api("jenkins_request", req, True, True).text
 
 
 class JobStormPython(JobStormBase):
@@ -449,7 +512,7 @@ class JobStormPython(JobStormBase):
         )
 
     def savefunc(self):
-        self.setfunc(level=2)
+        self.setfunc()
         src = self.getcode()
         src += "\n"
         src += "\n"
@@ -468,8 +531,9 @@ class JobStormPython(JobStormBase):
 
     def makefuncjob(self, runfunc, *args, **kwargs):
         if self.srcfilepath is None:
-            # error
-            return
+            srcfilepath = self.savefunc()
+            print(f"automatically save functions to '{srcfilepath}'.")
+            print("please run savefunc() again if you update functions.")
         tss = datetime.now().strftime("%Y%m%d%H%M%S%f")
         paramfilename = f"{PREFIX}{tss}.param"
         paramfilepath = os.path.join(self.dirpath, paramfilename)
@@ -495,8 +559,10 @@ class JobStormPython(JobStormBase):
         with open(filepath, "w") as f:
             f.write(src)
 
-        self.server.build_job(
-            self.project, {"job_filename": filename, "job_cmd": self.job_cmd}
+        self._retry_api(
+            "build_job",
+            self.project,
+            {"job_filename": filename, "job_cmd": self.job_cmd},
         )
         return JobResult(output_paramfilepath, filename, self)
 
@@ -551,7 +617,7 @@ class JobStormSage(JobStormBase):
         )
 
     def savefunc(self):
-        self.setfunc(level=2)
+        self.setfunc()
         src = self.getcode()
         src += "\n"
         src += "\n"
@@ -578,8 +644,9 @@ class JobStormSage(JobStormBase):
 
     def makefuncjob(self, runfunc, *args, **kwargs):
         if self.srcfilepath is None:
-            # error
-            return
+            srcfilepath = self.savefunc()
+            print(f"automatically save functions to '{srcfilepath}'.")
+            print("please run savefunc() again if you update functions.")
         tss = datetime.now().strftime("%Y%m%d%H%M%S%f")
         paramfilename = f"{PREFIX}{tss}.param"
         paramfilepath = os.path.join(self.dirpath, paramfilename)
@@ -605,8 +672,10 @@ class JobStormSage(JobStormBase):
         with open(filepath, "w") as f:
             f.write(src)
 
-        self.server.build_job(
-            self.project, {"job_filename": filename, "job_cmd": self.job_cmd}
+        self._retry_api(
+            "build_job",
+            self.project,
+            {"job_filename": filename, "job_cmd": self.job_cmd},
         )
         return JobResult(output_paramfilepath, filename, self)
 
@@ -627,7 +696,7 @@ class JobStormSage(JobStormBase):
             return
         job_script = job[3]
         func_script = job[4]
-        job_name = job_script[0:-7]
+        job_name = job_script[0:-9]
         self.delete_file(f"{job_name}_job.sage")
         self.delete_file(f"{job_name}.param")
         self.delete_file(f"{job_name}.param.output")
