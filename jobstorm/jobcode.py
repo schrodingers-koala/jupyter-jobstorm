@@ -3,6 +3,7 @@ import pathlib
 from datetime import datetime
 import re
 import inspect
+import ast
 import dill
 import jenkins
 from jenkins.__init__ import DELETE_BUILD
@@ -362,8 +363,13 @@ class JobStormBase:
             return
         frame_tuple = stack[ipy_list[ipy]]
         for k, v in frame_tuple[0].f_globals.items():
-            if inspect.isfunction(v) and self._is_ipy_tmp(inspect.getfile(v)):
-                self.funcs.append(v.__name__)
+            try:
+                if inspect.isfunction(v) and self._is_ipy_tmp(inspect.getfile(v)):
+                    self.funcs.append(v.__name__)
+                if inspect.isclass(v) and self._is_ipy_tmp(inspect.getfile(v.__init__)):
+                    self.funcs.append(v.__name__)
+            except:
+                pass
 
     def _getfunc(self):
         funcs = []
@@ -378,6 +384,23 @@ class JobStormBase:
             codes += code
         return codes
 
+    def _retrieve_findsource(self, v):
+        lines = inspect.findsource(v.__init__)[0]
+        source = "".join(lines)
+        tree = ast.parse(source)
+        class_finder = inspect._ClassFinder(v.__qualname__)
+        try:
+            class_finder.visit(tree)
+        except inspect.ClassFoundException as e:
+            line_num = e.args[0]
+            return lines, line_num
+        raise RuntimeError("could not find class definition.")
+
+    def _retrieve_class(self, v):
+        lines, line_num = self._retrieve_findsource(v)
+        block_lines = inspect.getblock(lines[line_num:])
+        return "".join(block_lines)
+
     def _retrieve(self, name):
         for frame_tuple in inspect.stack():
             d = frame_tuple[0].f_globals
@@ -387,6 +410,8 @@ class JobStormBase:
             v = d[name]
             if inspect.isfunction(v):
                 return inspect.getsource(v)
+            if inspect.isclass(v):
+                return self._retrieve_class(v)
         return None
 
     def saveparam(self, filename, params):

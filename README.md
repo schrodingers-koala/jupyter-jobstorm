@@ -19,10 +19,12 @@ I believe that Jenkins will catch and execute jobs which are sent from you like 
 ## Feature
 
 - Supporting Jenkins as job runner
-- Running a function (\*) of Python/SageMath script as a job
+- Running a function (\*)(\*\*) of Python/SageMath script as a job
 - Retrieving the status and the result of the job
 
 (\*) Currently only variables of function arguments are passed to the function and variables outside of the function are not supported.
+
+(\*\*) Since version 0.4.0, function using classes defined in Jupyter code cell is supported.
 
 ## Requirement
 
